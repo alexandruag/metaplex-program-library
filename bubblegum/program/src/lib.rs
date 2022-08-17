@@ -31,6 +31,9 @@ pub mod error;
 pub mod state;
 pub mod utils;
 
+#[cfg(test)]
+mod tests;
+
 declare_id!("BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY");
 
 #[derive(Accounts)]
@@ -525,6 +528,9 @@ pub mod bubblegum {
         max_depth: u32,
         max_buffer_size: u32,
     ) -> Result<()> {
+        // panic!("aaaaaa");
+        // Err(BubblegumError::MintRequestDiscriminatorMismatch)?;
+
         let merkle_slab = ctx.accounts.merkle_slab.to_account_info();
         let seed = merkle_slab.key();
         let seeds = &[seed.as_ref(), &[*ctx.bumps.get("authority").unwrap()]];
@@ -595,6 +601,8 @@ pub mod bubblegum {
     }
 
     pub fn mint_v1(ctx: Context<MintV1>, message: MetadataArgs) -> Result<()> {
+        // Err(BubblegumError::MintRequestDiscriminatorMismatch)?;
+
         // TODO -> Pass collection in check collection authority or collection delegate authority signer
         // TODO -> Separate V1 / V1 into seperate instructions
         let owner = ctx.accounts.owner.key();
@@ -854,15 +862,14 @@ pub mod bubblegum {
                 if !cmp_pubkeys(&owner, ctx.accounts.owner.key) {
                     return Err(BubblegumError::AssetOwnerMismatch.into());
                 }
-                Ok(NFTDecompressionEvent {
+                NFTDecompressionEvent {
                     version: Version::V1,
                     tree_id: ctx.accounts.voucher.merkle_slab.key(),
                     id: get_asset_id(&ctx.accounts.voucher.merkle_slab.key(), nonce),
-                    nonce: nonce,
-                })
+                    nonce,
+                }
             }
-            _ => Err(BubblegumError::UnsupportedSchemaVersion),
-        }?;
+        };
         let voucher = &ctx.accounts.voucher;
         match metadata.token_program_version {
             TokenProgramVersion::Original => {

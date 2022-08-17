@@ -35,3 +35,19 @@ pub enum BubblegumError {
     #[msg("Something went wrong closing mint request")]
     CloseMintRequestError,
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//
+//     #[test]
+//     fn asdf() {
+//         // let err = BubblegumError::from(3009);
+//         //
+//         // assert_eq!(format!("{}", err), "asdf");
+//
+//         // let x: u32 = BubblegumError::CloseMintRequestError.into();
+//         let x: u32 = BubblegumError::CloseMintRequestError.into();
+//         assert_eq!(format!("{}", x), "asdf");
+//     }
+// }

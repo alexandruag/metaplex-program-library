@@ -32,6 +32,9 @@ pub mod error;
 pub mod state;
 pub mod utils;
 
+#[cfg(test)]
+pub mod tests;
+
 declare_id!("BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY");
 
 #[derive(Accounts)]
@@ -1058,15 +1061,14 @@ pub mod bubblegum {
                 if !cmp_pubkeys(&owner, ctx.accounts.owner.key) {
                     return Err(BubblegumError::AssetOwnerMismatch.into());
                 }
-                Ok(NFTDecompressionEvent {
+                NFTDecompressionEvent {
                     version: Version::V1,
                     tree_id: ctx.accounts.voucher.merkle_slab.key(),
                     id: get_asset_id(&ctx.accounts.voucher.merkle_slab.key(), nonce),
-                    nonce: nonce,
-                })
+                    nonce,
+                }
             }
-            _ => Err(BubblegumError::UnsupportedSchemaVersion),
-        }?;
+        };
         let voucher = &ctx.accounts.voucher;
         match metadata.token_program_version {
             TokenProgramVersion::Original => {

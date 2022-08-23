@@ -13,7 +13,7 @@ pub const VOUCHER_SIZE: usize = 8 + 1 + 32 + 32 + 32 + 8 + 32 + 32 + 4 + 32;
 pub const VOUCHER_PREFIX: &str = "voucher";
 pub const ASSET_PREFIX: &str = "asset";
 #[account]
-#[derive(Copy)]
+#[derive(Copy, Debug)]
 pub struct TreeConfig {
     pub creator: Pubkey,
     pub delegate: Pubkey,

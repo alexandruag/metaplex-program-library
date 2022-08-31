@@ -57,9 +57,10 @@ pub fn clone_keypair(k: &Keypair) -> Keypair {
     Keypair::from_bytes(k.to_bytes().as_slice()).unwrap()
 }
 
-// Make `delegate` from the fns below member?
 pub struct Tree {
     tree_creator: Keypair,
+    // TODO: Update all methods that work with the tree delegate to use this instead of a param.
+    tree_delegate: Keypair,
     merkle_roll: Keypair,
     max_depth: u32,
     max_buffer_size: u32,
@@ -262,6 +263,52 @@ impl Tree {
 
         instruction(accounts, data)
     }
+
+    pub fn delegate_instruction(
+        &self,
+        owner: Pubkey,
+        previous_delegate: Pubkey,
+        new_delegate: Pubkey,
+        metadata_args: &MetadataArgs,
+        root: [u8; 32],
+        nonce: u64,
+        index: u32,
+    ) -> Instruction {
+        let accounts = crate::accounts::Delegate {
+            authority: self.authority(),
+            owner,
+            previous_delegate,
+            new_delegate,
+            candy_wrapper: mpl_candy_wrapper::id(),
+            gummyroll_program: gummyroll::id(),
+            merkle_slab: self.roll_pubkey(),
+        };
+
+        let (data_hash, creator_hash) = compute_metadata_hashes(metadata_args);
+
+        let data = crate::instruction::Delegate {
+            root,
+            data_hash,
+            creator_hash,
+            nonce,
+            index,
+        };
+
+        instruction(accounts, data)
+    }
+
+    pub fn set_tree_delegate_instruction(&self, new_delegate: Pubkey) -> Instruction {
+        let accounts = crate::accounts::SetTreeDelegate {
+            creator: self.creator_pubkey(),
+            new_delegate,
+            merkle_slab: self.roll_pubkey(),
+            tree_authority: self.authority(),
+        };
+
+        let data = crate::instruction::SetTreeDelegate;
+
+        instruction(accounts, data)
+    }
 }
 
 // Computes the `data_hash` and `creator_hash`. Taken from the contract code where something
@@ -460,7 +507,7 @@ impl TreeClient {
     }
 
     pub async fn burn(
-        &mut self,
+        &self,
         owner: &Keypair,
         delegate: Pubkey,
         metadata_args: &MetadataArgs,
@@ -478,8 +525,9 @@ impl TreeClient {
 
     // Have the nft owner as a parameter
     pub async fn transfer(
-        &mut self,
+        &self,
         delegate: Pubkey,
+        // Pubkey here right?
         new_owner: &Keypair,
         metadata_args: &MetadataArgs,
         index: u32,
@@ -495,10 +543,50 @@ impl TreeClient {
                 nonce,
                 index,
             ),
-            &self.tree_creator.pubkey(),
+            &self.creator_pubkey(),
             &[&self.tree_creator],
         )
         .await
+    }
+
+    // Does the prev delegate need to sign as well?
+    pub async fn delegate(
+        &self,
+        owner: &Keypair,
+        previous_delegate: Pubkey,
+        new_delegate: Pubkey,
+        metadata_args: &MetadataArgs,
+        index: u32,
+    ) -> Result<()> {
+        let (root, nonce) = self.decode_roll().await?;
+
+        self.process_tx(
+            self.delegate_instruction(
+                owner.pubkey(),
+                previous_delegate,
+                new_delegate,
+                metadata_args,
+                root,
+                nonce,
+                index,
+            ),
+            &owner.pubkey(),
+            &[owner],
+        )
+        .await
+    }
+
+    pub async fn set_tree_delegate(&mut self, new_delegate: &Keypair) -> Result<()> {
+        self.process_tx(
+            self.set_tree_delegate_instruction(new_delegate.pubkey()),
+            &self.creator_pubkey(),
+            &[&self.tree_creator],
+        )
+        .await?;
+
+        self.tree_delegate = clone_keypair(new_delegate);
+
+        Ok(())
     }
 
     // Move to another struct?

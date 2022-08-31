@@ -17,7 +17,7 @@ async fn test_simple() -> Result<()> {
     let mut context = program_test().start_with_context().await;
 
     let merkle_roll = Keypair::new();
-    // let delegate = Keypair::new();
+    let new_tree_delegate = Keypair::new();
     let new_owner = Keypair::new();
 
     let payer = &context.payer;
@@ -45,6 +45,7 @@ async fn test_simple() -> Result<()> {
     let mut tree = TreeClient::new(
         Tree {
             tree_creator: clone_keypair(payer),
+            tree_delegate: clone_keypair(payer),
             merkle_roll,
             max_depth: MAX_DEPTH,
             max_buffer_size: MAX_SIZE,
@@ -118,11 +119,17 @@ async fn test_simple() -> Result<()> {
     tree.mint_v1(tree.authority(), payer, payer.pubkey(), &message)
         .await?;
 
-    tree.transfer(payer.pubkey(), &new_owner, &message, 0)
+    let new_nft_delegate = Keypair::new().pubkey();
+    tree.delegate(payer, payer.pubkey(), new_nft_delegate, &message, 0)
+        .await?;
+
+    tree.transfer(new_nft_delegate, &new_owner, &message, 0)
         .await?;
 
     tree.burn(&new_owner, new_owner.pubkey(), &message, 0)
         .await?;
+
+    tree.set_tree_delegate(&new_tree_delegate).await?;
 
     Ok(())
 }

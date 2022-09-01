@@ -61,7 +61,6 @@ pub struct TxBuilder<'a, T, U> {
     pub accounts: T,
     pub data: U,
     pub payer: Pubkey,
-    pub tree: &'a mut Tree,
     client: RefCell<BanksClient>,
     default_signers: Vec<Keypair>,
 }
@@ -75,9 +74,9 @@ where
         self.client.borrow_mut()
     }
 
-    pub async fn execute_with_signers<S: Signers>(self, signing_keypairs: S) -> Result<()> {
+    pub async fn execute_with_signers<S: Signers>(mut self, signing_keypairs: S) -> Result<()> {
         let recent_blockhash = self
-            .client()
+            .client
             .get_latest_blockhash()
             .await
             .map_err(Error::BanksClient)?;
@@ -85,7 +84,6 @@ where
         let ix = instruction(self.accounts, self.data);
 
         self.client
-            .borrow_mut()
             .process_transaction(Transaction::new_signed_with_payer(
                 &[ix],
                 Some(&self.payer),
@@ -106,6 +104,8 @@ where
 
 pub type CreateBuilder<'a> =
     TxBuilder<'a, crate::accounts::CreateTree, crate::instruction::CreateTree>;
+
+pub type MintV1Builder<'a> = TxBuilder<'a, crate::accounts::MintV1, crate::instruction::MintV1>;
 
 // impl CreateBuilder {
 //     pub async fn execute(&mut self) -> Result<()> {
@@ -491,7 +491,7 @@ impl TreeClient {
             max_buffer_size: self.max_buffer_size,
         };
 
-        let client = RefCell::new(self.client.borrow().clone());
+        let client = self.client.borrow().clone();
 
         CreateBuilder {
             accounts,
@@ -503,29 +503,60 @@ impl TreeClient {
         }
     }
 
-    pub async fn create(&self, payer: &Keypair) -> Result<()> {
-        self.process_tx(
-            self.create_instruction(payer.pubkey()),
-            &payer.pubkey(),
-            &[payer],
-        )
-        .await
+    pub async fn create(&mut self, payer: &Keypair) -> Result<()> {
+        self.create_tx(payer).execute().await
+    }
+
+    pub fn mint_v1_tx(
+        &mut self,
+        mint_authority: Pubkey,
+        owner: &Keypair,
+        delegate: Pubkey,
+        message: &MetadataArgs,
+    ) -> MintV1Builder {
+        let accounts = crate::accounts::MintV1 {
+            mint_authority,
+            authority: self.authority(),
+            candy_wrapper: mpl_candy_wrapper::id(),
+            gummyroll_program: gummyroll::id(),
+            owner: owner.pubkey(),
+            delegate,
+            mint_authority_request: self.mint_authority_request(&mint_authority),
+            merkle_slab: self.roll_pubkey(),
+        };
+
+        let data = crate::instruction::MintV1 {
+            message: message.clone(),
+        };
+
+        let client = self.client.borrow().clone();
+
+        MintV1Builder {
+            accounts,
+            data,
+            payer: owner.pubkey(),
+            tree: self,
+            client,
+            default_signers: vec![clone_keypair(owner), clone_keypair(&self.tree_creator)],
+        }
     }
 
     // This assumes the owner is the account paying for the tx.
     pub async fn mint_v1(
-        &self,
+        &mut self,
         mint_authority: Pubkey,
         owner: &Keypair,
         delegate: Pubkey,
         message: &MetadataArgs,
     ) -> Result<()> {
-        self.process_tx(
-            self.mint_v1_instruction(mint_authority, owner.pubkey(), delegate, message),
-            &owner.pubkey(),
-            &[owner],
-        )
-        .await
+        // self.process_tx(
+        //     self.mint_v1_instruction(mint_authority, owner.pubkey(), delegate, message),
+        //     &owner.pubkey(),
+        //     &[owner],
+        // )
+        // .await
+
+        self.mint_v1_tx(mint_authority, owner, delegate, message).execute().await
     }
 
     pub async fn set_default_mint_request(

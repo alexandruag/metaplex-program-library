@@ -55,7 +55,9 @@ async fn test_simple() -> Result<()> {
     );
 
     tree.alloc(payer).await?;
-    tree.create(payer).await?;
+
+    // tree.create(payer).await?;
+    tree.create_tx(payer).execute().await?;
 
     // println!("*** tree config {:?}", tree.read_tree_config().await);
     // println!(

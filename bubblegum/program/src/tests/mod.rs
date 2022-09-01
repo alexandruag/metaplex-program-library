@@ -41,7 +41,7 @@ fn program_test() -> ProgramTest {
     test
 }
 
-pub fn instruction<T, U>(accounts: T, data: U) -> Instruction
+fn instruction<T, U>(accounts: T, data: U) -> Instruction
 where
     T: ToAccountMetas,
     U: InstructionData,
@@ -56,6 +56,62 @@ where
 pub fn clone_keypair(k: &Keypair) -> Keypair {
     Keypair::from_bytes(k.to_bytes().as_slice()).unwrap()
 }
+
+pub struct TxBuilder<'a, T, U> {
+    pub accounts: T,
+    pub data: U,
+    pub payer: Pubkey,
+    pub tree: &'a mut Tree,
+    client: RefCell<BanksClient>,
+    default_signers: Vec<Keypair>,
+}
+
+impl<'a, T, U> TxBuilder<'a, T, U>
+where
+    T: ToAccountMetas,
+    U: InstructionData,
+{
+    fn client(&self) -> RefMut<BanksClient> {
+        self.client.borrow_mut()
+    }
+
+    pub async fn execute_with_signers<S: Signers>(self, signing_keypairs: S) -> Result<()> {
+        let recent_blockhash = self
+            .client()
+            .get_latest_blockhash()
+            .await
+            .map_err(Error::BanksClient)?;
+
+        let ix = instruction(self.accounts, self.data);
+
+        self.client
+            .borrow_mut()
+            .process_transaction(Transaction::new_signed_with_payer(
+                &[ix],
+                Some(&self.payer),
+                &signing_keypairs,
+                recent_blockhash,
+            ))
+            .await
+            .map_err(Error::BanksClient)
+    }
+
+    pub async fn execute(mut self) -> Result<()> {
+        let signing_keypairs: Vec<Keypair> = self.default_signers.drain(..).collect();
+
+        self.execute_with_signers(signing_keypairs.iter().collect::<Vec<_>>())
+            .await
+    }
+}
+
+pub type CreateBuilder<'a> =
+    TxBuilder<'a, crate::accounts::CreateTree, crate::instruction::CreateTree>;
+
+// impl CreateBuilder {
+//     pub async fn execute(&mut self) -> Result<()> {
+//         self.execute_with_signers()
+//     }
+// }
 
 pub struct Tree {
     tree_creator: Keypair,
@@ -417,6 +473,34 @@ impl TreeClient {
             &[payer, &self.merkle_roll],
         )
         .await
+    }
+
+    pub fn create_tx(&mut self, payer: &Keypair) -> CreateBuilder {
+        let accounts = crate::accounts::CreateTree {
+            authority: self.authority(),
+            payer: payer.pubkey(),
+            tree_creator: self.creator_pubkey(),
+            candy_wrapper: mpl_candy_wrapper::id(),
+            system_program: system_program::id(),
+            gummyroll_program: gummyroll::id(),
+            merkle_slab: self.roll_pubkey(),
+        };
+
+        let data = crate::instruction::CreateTree {
+            max_depth: self.max_depth,
+            max_buffer_size: self.max_buffer_size,
+        };
+
+        let client = RefCell::new(self.client.borrow().clone());
+
+        CreateBuilder {
+            accounts,
+            data,
+            payer: payer.pubkey(),
+            tree: self,
+            client,
+            default_signers: vec![clone_keypair(payer)],
+        }
     }
 
     pub async fn create(&self, payer: &Keypair) -> Result<()> {

@@ -57,12 +57,44 @@ pub fn clone_keypair(k: &Keypair) -> Keypair {
     Keypair::from_bytes(k.to_bytes().as_slice()).unwrap()
 }
 
+// Computes the `data_hash` and `creator_hash`. Taken from the contract code where something
+// similar is computed. Needs cleanup.
+fn compute_metadata_hashes(metadata_args: &MetadataArgs) -> ([u8; 32], [u8; 32]) {
+    let data_hash = crate::hash_metadata(metadata_args).expect("handle error?");
+
+    let creator_data = metadata_args
+        .creators
+        .iter()
+        .map(|c| {
+            // if c.verified && !metadata_auth.contains(&c.address) {
+            //     panic!("aaaaaaa");
+            // } else {
+            [c.address.as_ref(), &[c.verified as u8], &[c.share]].concat()
+            //}
+        })
+        .collect::<Vec<_>>();
+
+    // Calculate creator hash.
+    let creator_hash = keccak::hashv(
+        creator_data
+            .iter()
+            .map(|c| c.as_slice())
+            .collect::<Vec<&[u8]>>()
+            .as_ref(),
+    )
+    .0;
+
+    (data_hash, creator_hash)
+}
+
 pub struct TxBuilder<T, U> {
     pub accounts: T,
     pub data: U,
     pub payer: Pubkey,
     client: RefCell<BanksClient>,
-    default_signers: Vec<Keypair>,
+    // Using only `Keypair`s as signers for now; can make this
+    // more generic if needed.
+    signers: Vec<Keypair>,
 }
 
 impl<T, U> TxBuilder<T, U>
@@ -74,7 +106,7 @@ where
         self.client.borrow_mut()
     }
 
-    pub async fn execute_with_signers<S: Signers>(&self, signing_keypairs: S) -> Result<()> {
+    pub async fn execute(&self) -> Result<()> {
         let recent_blockhash = self
             .client()
             .get_latest_blockhash()
@@ -87,16 +119,17 @@ where
             .process_transaction(Transaction::new_signed_with_payer(
                 &[ix],
                 Some(&self.payer),
-                &signing_keypairs,
+                &self.signers.iter().collect::<Vec<_>>(),
                 recent_blockhash,
             ))
             .await
             .map_err(Error::BanksClient)
     }
 
-    pub async fn execute(&self) -> Result<()> {
-        self.execute_with_signers(self.default_signers.iter().collect::<Vec<_>>())
-            .await
+    // Returning `&mut Self` to allow method chaining.
+    pub fn set_signers(&mut self, signers: &[&Keypair]) -> &mut Self {
+        self.signers = signers.iter().map(|k| clone_keypair(k)).collect();
+        self
     }
 }
 
@@ -107,6 +140,9 @@ pub type MintV1Builder = TxBuilder<crate::accounts::MintV1, crate::instruction::
 pub type SetDefaultMintRequestBuilder =
     TxBuilder<crate::accounts::SetDefaultMintRequest, crate::instruction::CreateDefaultMintRequest>;
 
+pub type ApproveMintRequestBuilder =
+    TxBuilder<crate::accounts::ApproveMintRequest, crate::instruction::ApproveMintAuthorityRequest>;
+
 pub type BurnBuilder = TxBuilder<crate::accounts::Burn, crate::instruction::Burn>;
 
 pub type TransferBuilder = TxBuilder<crate::accounts::Transfer, crate::instruction::Transfer>;
@@ -116,25 +152,51 @@ pub type DelegateBuilder = TxBuilder<crate::accounts::Delegate, crate::instructi
 pub type SetTreeDelegateBuilder =
     TxBuilder<crate::accounts::SetTreeDelegate, crate::instruction::SetTreeDelegate>;
 
-// impl CreateBuilder {
-//     pub async fn execute(&mut self) -> Result<()> {
-//         self.execute_with_signers()
-//     }
-// }
+const MAX_DEPTH: u32 = 20;
+const MAX_SIZE: u32 = 64;
 
 pub struct Tree {
-    tree_creator: Keypair,
+    pub tree_creator: Keypair,
     // TODO: Update all methods that work with the tree delegate to use this instead of a param.
-    tree_delegate: Keypair,
-    merkle_roll: Keypair,
-    max_depth: u32,
-    max_buffer_size: u32,
-    canopy_depth: u32,
+    pub tree_delegate: Keypair,
+    pub merkle_roll: Keypair,
+    pub max_depth: u32,
+    pub max_buffer_size: u32,
+    pub canopy_depth: u32,
+    // Using `RefCell` to provide interior mutability and circumvent some
+    // annoyance with the borrow checker (i.e. provide helper methods that
+    // only need &self, vs &mut self); if we'll ever need to use this
+    // in a context with multiple threads, we can just replace the wrapper
+    // with a `Mutex`.
+    client: RefCell<BanksClient>,
 }
 
 impl Tree {
+    // This and `with_creator` use a bunch of defaults; things can be
+    // customized some more via the public access, or we can add extra
+    // methods to make things even easier.
+    pub fn new(client: BanksClient) -> Self {
+        Self::with_creator(&Keypair::new(), client)
+    }
+
+    pub fn with_creator(tree_creator: &Keypair, client: BanksClient) -> Self {
+        Tree {
+            tree_creator: clone_keypair(tree_creator),
+            tree_delegate: clone_keypair(tree_creator),
+            merkle_roll: Keypair::new(),
+            max_depth: MAX_DEPTH,
+            max_buffer_size: MAX_SIZE,
+            canopy_depth: 0,
+            client: RefCell::new(client),
+        }
+    }
+
     pub fn creator_pubkey(&self) -> Pubkey {
         self.tree_creator.pubkey()
+    }
+
+    pub fn delegate_pubkey(&self) -> Pubkey {
+        self.tree_delegate.pubkey()
     }
 
     pub fn roll_pubkey(&self) -> Pubkey {
@@ -179,265 +241,6 @@ impl Tree {
             account_size,
             &gummyroll::id(),
         )
-    }
-
-    pub fn create_instruction(&self, payer: Pubkey) -> Instruction {
-        let accounts = crate::accounts::CreateTree {
-            authority: self.authority(),
-            payer,
-            tree_creator: self.creator_pubkey(),
-            candy_wrapper: mpl_candy_wrapper::id(),
-            system_program: system_program::id(),
-            gummyroll_program: gummyroll::id(),
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let data = crate::instruction::CreateTree {
-            max_depth: self.max_depth,
-            max_buffer_size: self.max_buffer_size,
-        };
-
-        instruction(&accounts, &data)
-    }
-
-    pub fn mint_v1_instruction(
-        &self,
-        mint_authority: Pubkey,
-        owner: Pubkey,
-        delegate: Pubkey,
-        message: &MetadataArgs,
-    ) -> Instruction {
-        let accounts = crate::accounts::MintV1 {
-            mint_authority,
-            authority: self.authority(),
-            candy_wrapper: mpl_candy_wrapper::id(),
-            gummyroll_program: gummyroll::id(),
-            owner,
-            delegate,
-            mint_authority_request: self.mint_authority_request(&mint_authority),
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let data = crate::instruction::MintV1 {
-            message: message.clone(),
-        };
-
-        instruction(&accounts, &data)
-    }
-
-    pub fn burn_instruction(
-        &self,
-        owner: Pubkey,
-        delegate: Pubkey,
-        metadata_args: &MetadataArgs,
-        root: [u8; 32],
-        nonce: u64,
-        index: u32,
-    ) -> Instruction {
-        let accounts = crate::accounts::Burn {
-            authority: self.authority(),
-            candy_wrapper: mpl_candy_wrapper::id(),
-            gummyroll_program: gummyroll::id(),
-            owner,
-            delegate,
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let (data_hash, creator_hash) = compute_metadata_hashes(metadata_args);
-
-        let data = crate::instruction::Burn {
-            root,
-            data_hash,
-            creator_hash,
-            nonce,
-            index,
-        };
-
-        instruction(&accounts, &data)
-    }
-
-    pub fn set_default_mint_request_instruction(
-        &self,
-        payer: Pubkey,
-        mint_capacity: u64,
-    ) -> Instruction {
-        let tree_authority = self.authority();
-
-        let accounts = crate::accounts::SetDefaultMintRequest {
-            mint_authority_request: self.mint_authority_request(&tree_authority),
-            payer,
-            creator: self.creator_pubkey(),
-            tree_authority,
-            system_program: system_program::id(),
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let data = crate::instruction::CreateDefaultMintRequest { mint_capacity };
-
-        instruction(&accounts, &data)
-    }
-
-    pub fn approve_mint_request_instruction(
-        &self,
-        mint_authority_request: Pubkey,
-        tree_delegate: Pubkey,
-        num_mints_to_approve: u64,
-    ) -> Instruction {
-        let accounts = crate::accounts::ApproveMintRequest {
-            mint_authority_request,
-            tree_delegate,
-            tree_authority: self.authority(),
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let data = crate::instruction::ApproveMintAuthorityRequest {
-            num_mints_to_approve,
-        };
-
-        instruction(&accounts, &data)
-    }
-
-    /*
-    pub fn transfer_instruction(
-        &self,
-        delegate: Pubkey,
-        new_owner: Pubkey,
-        metadata_args: &MetadataArgs,
-        root: [u8; 32],
-        nonce: u64,
-        index: u32,
-    ) -> Instruction {
-        let accounts = crate::accounts::Transfer {
-            authority: self.authority(),
-            owner: self.tree_creator.pubkey(),
-            delegate,
-            new_owner,
-            candy_wrapper: mpl_candy_wrapper::id(),
-            gummyroll_program: gummyroll::id(),
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let (data_hash, creator_hash) = compute_metadata_hashes(metadata_args);
-
-        let data = crate::instruction::Transfer {
-            root,
-            data_hash,
-            creator_hash,
-            nonce,
-            index,
-        };
-
-        instruction(&accounts, &data)
-    }
-    */
-
-    pub fn delegate_instruction(
-        &self,
-        owner: Pubkey,
-        previous_delegate: Pubkey,
-        new_delegate: Pubkey,
-        metadata_args: &MetadataArgs,
-        root: [u8; 32],
-        nonce: u64,
-        index: u32,
-    ) -> Instruction {
-        let accounts = crate::accounts::Delegate {
-            authority: self.authority(),
-            owner,
-            previous_delegate,
-            new_delegate,
-            candy_wrapper: mpl_candy_wrapper::id(),
-            gummyroll_program: gummyroll::id(),
-            merkle_slab: self.roll_pubkey(),
-        };
-
-        let (data_hash, creator_hash) = compute_metadata_hashes(metadata_args);
-
-        let data = crate::instruction::Delegate {
-            root,
-            data_hash,
-            creator_hash,
-            nonce,
-            index,
-        };
-
-        instruction(&accounts, &data)
-    }
-
-    pub fn set_tree_delegate_instruction(&self, new_delegate: Pubkey) -> Instruction {
-        let accounts = crate::accounts::SetTreeDelegate {
-            creator: self.creator_pubkey(),
-            new_delegate,
-            merkle_slab: self.roll_pubkey(),
-            tree_authority: self.authority(),
-        };
-
-        let data = crate::instruction::SetTreeDelegate;
-
-        instruction(&accounts, &data)
-    }
-}
-
-// Computes the `data_hash` and `creator_hash`. Taken from the contract code where something
-// similar is computed. Needs cleanup.
-fn compute_metadata_hashes(metadata_args: &MetadataArgs) -> ([u8; 32], [u8; 32]) {
-    let data_hash = crate::hash_metadata(metadata_args).expect("handle error?");
-
-    let creator_data = metadata_args
-        .creators
-        .iter()
-        .map(|c| {
-            // if c.verified && !metadata_auth.contains(&c.address) {
-            //     panic!("aaaaaaa");
-            // } else {
-            [c.address.as_ref(), &[c.verified as u8], &[c.share]].concat()
-            //}
-        })
-        .collect::<Vec<_>>();
-
-    // Calculate creator hash.
-    let creator_hash = keccak::hashv(
-        creator_data
-            .iter()
-            .map(|c| c.as_slice())
-            .collect::<Vec<&[u8]>>()
-            .as_ref(),
-    )
-    .0;
-
-    (data_hash, creator_hash)
-}
-
-pub struct TreeClient {
-    inner: Tree,
-    // Using `RefCell` to provide interior mutability and circumvent some
-    // annoyance with the borrow checker (i.e. provide helper methods that
-    // only need &self, vs &mut self); if we'll ever need to use this
-    // in a context with multiple threads, we can just replace the wrapper
-    // with a `Mutex`.
-    client: RefCell<BanksClient>,
-}
-
-impl std::ops::Deref for TreeClient {
-    type Target = Tree;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl std::ops::DerefMut for TreeClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
-impl TreeClient {
-    pub fn new(inner: Tree, client: BanksClient) -> Self {
-        TreeClient {
-            inner,
-            client: RefCell::new(client.clone()),
-        }
     }
 
     pub fn client(&self) -> RefMut<BanksClient> {
@@ -500,7 +303,7 @@ impl TreeClient {
             data,
             payer,
             client: self.client.clone(),
-            default_signers: def_signers,
+            signers: def_signers,
         }
     }
 
@@ -582,29 +385,44 @@ impl TreeClient {
         self.tx_builder(accounts, data, self.creator_pubkey(), &[&self.tree_creator])
     }
 
-    pub async fn set_default_mint_request(
+    pub async fn set_default_mint_request(&self, mint_capacity: u64) -> Result<()> {
+        self.set_default_mint_request_tx(mint_capacity)
+            .execute()
+            .await
+    }
+
+    pub fn approve_mint_request_tx(
         &self,
-        mint_capacity: u64,
-    ) -> Result<()> {
-        self.set_default_mint_request_tx(mint_capacity).execute().await
+        mint_authority_request: Pubkey,
+        num_mints_to_approve: u64,
+    ) -> ApproveMintRequestBuilder {
+        let accounts = crate::accounts::ApproveMintRequest {
+            mint_authority_request,
+            tree_delegate: self.delegate_pubkey(),
+            tree_authority: self.authority(),
+            merkle_slab: self.roll_pubkey(),
+        };
+
+        let data = crate::instruction::ApproveMintAuthorityRequest {
+            num_mints_to_approve,
+        };
+
+        self.tx_builder(
+            accounts,
+            data,
+            self.delegate_pubkey(),
+            &[&self.tree_delegate],
+        )
     }
 
     pub async fn approve_mint_request(
         &self,
         mint_authority_request: Pubkey,
-        tree_delegate: &Keypair,
         num_mints_to_approve: u64,
     ) -> Result<()> {
-        self.process_tx(
-            self.approve_mint_request_instruction(
-                mint_authority_request,
-                tree_delegate.pubkey(),
-                num_mints_to_approve,
-            ),
-            &tree_delegate.pubkey(),
-            &[tree_delegate],
-        )
-        .await
+        self.approve_mint_request_tx(mint_authority_request, num_mints_to_approve)
+            .execute()
+            .await
     }
 
     // When `Ok`, returns a (root, nonce) pair. Might need a better implementation for this

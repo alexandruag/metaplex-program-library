@@ -65,7 +65,7 @@ async fn test_simple() -> Result<()> {
     //     tree.read_mint_authority_request(&tree.authority()).await
     // );
 
-    tree.set_default_mint_request(payer, 1024 * 1024).await?;
+    tree.set_default_mint_request(1024 * 1024).await?;
 
     // println!("*** tree config {:?}", tree.read_tree_config().await);
     //
@@ -125,7 +125,7 @@ async fn test_simple() -> Result<()> {
     tree.delegate(payer, payer.pubkey(), new_nft_delegate, &message, 0)
         .await?;
 
-    tree.transfer(new_nft_delegate, &new_owner, &message, 0)
+    tree.transfer(payer, new_nft_delegate, new_owner.pubkey(), &message, 0)
         .await?;
 
     tree.burn(&new_owner, new_owner.pubkey(), &message, 0)

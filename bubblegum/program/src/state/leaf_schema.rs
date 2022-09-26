@@ -28,7 +28,7 @@ impl Version {
     }
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize, Clone, Copy, Debug)]
+#[derive(AnchorDeserialize, AnchorSerialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LeafSchema {
     V1 {
         id: Pubkey,

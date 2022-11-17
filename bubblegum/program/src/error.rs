@@ -54,4 +54,22 @@ pub enum BubblegumError {
     UpdateAuthorityIncorrect,
     #[msg("This transaction must be signed by either the leaf owner or leaf delegate")]
     LeafAuthorityMustSign,
+    #[msg("Cannot verify a previously unverified creator")]
+    CannotVerifyAnotherCreator,
+    #[msg("Cannot unverify a previously verified creator")]
+    CannotUnverifyAnotherCreator,
+    #[msg("This use method is invalid")]
+    InvalidUseMethod,
+    #[msg("Cannot Change Use Method after the first use")]
+    CannotChangeUseMethodAfterFirstUse,
+    #[msg("Cannot Change Remaining or Available uses after the first use")]
+    CannotChangeUsesAfterFirstUse,
+    #[msg("The metadata for this asset is marked as immutable, and cannot be changed")]
+    DataIsImmutable,
+    #[msg("Cannot update a verified collection")]
+    CannotUpdateVerifiedCollection,
+    #[msg("Primary sale can only be flipped to true and is immutable")]
+    PrimarySaleCanOnlyBeFlippedToTrue,
+    #[msg("Is Mutable can only be flipped to false")]
+    IsMutableCanOnlyBeFlippedToFalse,
 }

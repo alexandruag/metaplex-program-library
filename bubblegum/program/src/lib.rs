@@ -36,6 +36,7 @@ use std::collections::HashSet;
 
 pub mod error;
 pub mod state;
+mod update_metadata;
 pub mod utils;
 
 declare_id!("BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY");
@@ -452,6 +453,27 @@ pub fn hash_creators(creators: &[Creator]) -> Result<[u8; 32]> {
             .as_ref(),
     )
     .to_bytes())
+}
+
+#[derive(Accounts)]
+pub struct UpdateMetadata<'info> {
+    #[account(
+    seeds = [merkle_tree.key().as_ref()],
+    bump,
+    )]
+    pub tree_authority: Account<'info, TreeConfig>,
+    /// CHECK: This account is checked in the instruction
+    pub leaf_owner: UncheckedAccount<'info>,
+    /// CHECK: This account is checked in the instruction
+    pub leaf_delegate: UncheckedAccount<'info>,
+    // Do we add a separate `payer` account as well, or the update auth is always
+    // the payer?
+    pub leaf_update_authority: Signer<'info>,
+    /// CHECK: This account is modified in the downstream program
+    pub merkle_tree: UncheckedAccount<'info>,
+    pub log_wrapper: Program<'info, Wrapper>,
+    pub compression_program: Program<'info, SplAccountCompression>,
+    pub system_program: Program<'info, System>,
 }
 
 pub fn hash_metadata(metadata: &MetadataArgs) -> Result<[u8; 32]> {
@@ -1619,5 +1641,77 @@ pub mod bubblegum {
     pub fn compress(_ctx: Context<Compress>) -> Result<()> {
         // TODO
         Ok(())
+    }
+
+    pub fn update_metadata<'info>(
+        ctx: Context<'_, '_, '_, 'info, UpdateMetadata<'info>>,
+        root: [u8; 32],
+        nonce: u64,
+        index: u32,
+        new_metadata: MetadataArgs,
+        old_metadata: MetadataArgs,
+    ) -> Result<()> {
+        let merkle_tree = ctx.accounts.merkle_tree.key();
+        let owner = ctx.accounts.leaf_owner.key();
+        let delegate = ctx.accounts.leaf_delegate.key();
+        let update_authority = ctx.accounts.leaf_update_authority.key();
+
+        // We're computing the hashes here since the caller passes `old_metadata` anyway.
+        // If this is too computationally intensive, we can revert to the behaviour where
+        // `data_hash` and `creator_hash` are explicit instruction arguments.
+        let data_hash = hash_metadata(&old_metadata)?;
+        let creator_hash = hash_creators(&old_metadata.creators)?;
+
+        // Perform validation. The following method doesn't actually update anything on its own,
+        // but rather applies a series of checks; we're just keeping the name of a similar
+        // function from Token Metadata for now.
+        update_metadata::process_update_metadata_accounts_v2(
+            &new_metadata,
+            &old_metadata,
+            &update_authority,
+        )?;
+
+        // If we got to this point, then `new_metadata` is valid w.r.t. `old_metadata`, while
+        // the compression program validates that `old_metadata` is actually valid because
+        // the expected hash would not match otherwise during `replace_leaf`.
+
+        let asset_id = get_asset_id(&merkle_tree.key(), nonce);
+        let previous_leaf = LeafSchema::new_v0(
+            asset_id,
+            owner.key(),
+            delegate.key(),
+            update_authority,
+            nonce,
+            data_hash,
+            creator_hash,
+        );
+
+        let new_data_hash = hash_metadata(&new_metadata)?;
+
+        let new_leaf = LeafSchema::new_v0(
+            asset_id,
+            owner.key(),
+            delegate.key(),
+            update_authority,
+            nonce,
+            new_data_hash,
+            creator_hash,
+        );
+
+        wrap_application_data_v1(new_leaf.to_event().try_to_vec()?, &ctx.accounts.log_wrapper)?;
+
+        replace_leaf(
+            &merkle_tree.key(),
+            *ctx.bumps.get("tree_authority").unwrap(),
+            &ctx.accounts.compression_program.to_account_info(),
+            &ctx.accounts.tree_authority.to_account_info(),
+            &ctx.accounts.merkle_tree.to_account_info(),
+            &ctx.accounts.log_wrapper.to_account_info(),
+            ctx.remaining_accounts,
+            root,
+            previous_leaf.to_node(),
+            new_leaf.to_node(),
+            index,
+        )
     }
 }

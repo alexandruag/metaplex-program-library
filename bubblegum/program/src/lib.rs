@@ -73,6 +73,8 @@ pub struct MintV1<'info> {
     pub leaf_owner: AccountInfo<'info>,
     /// CHECK: This account is neither written to nor read from.
     pub leaf_delegate: AccountInfo<'info>,
+    /// CHECK: This account is neither written to nor read from.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: unsafe
     pub merkle_tree: UncheckedAccount<'info>,
@@ -95,6 +97,8 @@ pub struct MintToCollectionV1<'info> {
     pub leaf_owner: AccountInfo<'info>,
     /// CHECK: This account is neither written to nor read from.
     pub leaf_delegate: AccountInfo<'info>,
+    /// CHECK: This account is neither written to nor read from.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: unsafe
     pub merkle_tree: UncheckedAccount<'info>,
@@ -134,6 +138,8 @@ pub struct Burn<'info> {
     pub leaf_owner: UncheckedAccount<'info>,
     /// CHECK: This account is checked in the instruction
     pub leaf_delegate: UncheckedAccount<'info>,
+    /// CHECK: We don't read from nor write to this account.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: This account is modified in the downstream program
     pub merkle_tree: UncheckedAccount<'info>,
@@ -153,6 +159,8 @@ pub struct CreatorVerification<'info> {
     pub leaf_owner: UncheckedAccount<'info>,
     /// CHECK: This account is chekced in the instruction
     pub leaf_delegate: UncheckedAccount<'info>,
+    /// CHECK: We don't read from nor write to this account.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: This account is modified in the downstream program
     pub merkle_tree: UncheckedAccount<'info>,
@@ -174,6 +182,8 @@ pub struct CollectionVerification<'info> {
     pub leaf_owner: UncheckedAccount<'info>,
     /// CHECK: This account is checked in the instruction
     pub leaf_delegate: UncheckedAccount<'info>,
+    /// CHECK: We don't read from nor write to this account.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: This account is modified in the downstream program
     pub merkle_tree: UncheckedAccount<'info>,
@@ -219,6 +229,8 @@ pub struct Transfer<'info> {
     pub leaf_delegate: UncheckedAccount<'info>,
     /// CHECK: This account is neither written to nor read from.
     pub new_leaf_owner: UncheckedAccount<'info>,
+    /// CHECK: We don't read from nor write to this account.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: This account is modified in the downstream program
     pub merkle_tree: UncheckedAccount<'info>,
@@ -240,6 +252,8 @@ pub struct Delegate<'info> {
     pub previous_leaf_delegate: UncheckedAccount<'info>,
     /// CHECK: This account is neither written to nor read from.
     pub new_leaf_delegate: UncheckedAccount<'info>,
+    /// CHECK: We don't read from nor write to this account.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: This account is modified in the downstream program
     pub merkle_tree: UncheckedAccount<'info>,
@@ -267,6 +281,8 @@ pub struct Redeem<'info> {
     pub leaf_owner: Signer<'info>,
     /// CHECK: This account is chekced in the instruction
     pub leaf_delegate: UncheckedAccount<'info>,
+    /// CHECK: We don't read from nor write to this account.
+    pub leaf_update_authority: UncheckedAccount<'info>,
     #[account(mut)]
     /// CHECK: checked in cpi
     pub merkle_tree: UncheckedAccount<'info>,
@@ -495,6 +511,7 @@ fn process_mint_v1<'info>(
     message: MetadataArgs,
     owner: Pubkey,
     delegate: Pubkey,
+    leaf_update_authority: Pubkey,
     metadata_auth: HashSet<Pubkey>,
     authority_bump: u8,
     authority: &mut Account<'info, TreeConfig>,
@@ -548,6 +565,7 @@ fn process_mint_v1<'info>(
         asset_id,
         owner,
         delegate,
+        leaf_update_authority,
         authority.num_minted,
         data_hash.to_bytes(),
         creator_hash.to_bytes(),
@@ -578,6 +596,7 @@ fn process_creator_verification<'info>(
 ) -> Result<()> {
     let owner = ctx.accounts.leaf_owner.to_account_info();
     let delegate = ctx.accounts.leaf_delegate.to_account_info();
+    let update_authority = ctx.accounts.leaf_update_authority.key();
     let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
 
     let creator = ctx.accounts.creator.key();
@@ -637,6 +656,7 @@ fn process_creator_verification<'info>(
         asset_id,
         owner.key(),
         delegate.key(),
+        update_authority,
         nonce,
         data_hash,
         creator_hash,
@@ -645,6 +665,7 @@ fn process_creator_verification<'info>(
         asset_id,
         owner.key(),
         delegate.key(),
+        update_authority,
         nonce,
         updated_data_hash,
         updated_creator_hash,
@@ -800,6 +821,7 @@ fn process_collection_verification<'info>(
 ) -> Result<()> {
     let owner = ctx.accounts.leaf_owner.to_account_info();
     let delegate = ctx.accounts.leaf_delegate.to_account_info();
+    let update_authority = ctx.accounts.leaf_update_authority.key();
     let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
     let collection_metadata = &ctx.accounts.collection_metadata;
     let collection_mint = ctx.accounts.collection_mint.to_account_info();
@@ -841,6 +863,7 @@ fn process_collection_verification<'info>(
         asset_id,
         owner.key(),
         delegate.key(),
+        update_authority,
         nonce,
         data_hash,
         creator_hash,
@@ -849,6 +872,7 @@ fn process_collection_verification<'info>(
         asset_id,
         owner.key(),
         delegate.key(),
+        update_authority,
         nonce,
         updated_data_hash,
         creator_hash,
@@ -916,6 +940,7 @@ pub mod bubblegum {
         let incoming_tree_delegate = ctx.accounts.tree_delegate.key();
         let owner = ctx.accounts.leaf_owner.key();
         let delegate = ctx.accounts.leaf_delegate.key();
+        let leaf_update_authority = ctx.accounts.leaf_update_authority.key();
         let authority = &mut ctx.accounts.tree_authority;
         let tree_creator = authority.tree_creator;
         let tree_delegate = authority.tree_delegate;
@@ -950,6 +975,7 @@ pub mod bubblegum {
             message,
             owner,
             delegate,
+            leaf_update_authority,
             metadata_auth,
             *ctx.bumps.get("tree_authority").unwrap(),
             authority,
@@ -974,6 +1000,7 @@ pub mod bubblegum {
         let incoming_tree_delegate = ctx.accounts.tree_delegate.key();
         let owner = ctx.accounts.leaf_owner.key();
         let delegate = ctx.accounts.leaf_delegate.key();
+        let leaf_update_authority = ctx.accounts.leaf_update_authority.key();
         let authority = &mut ctx.accounts.tree_authority;
         let tree_creator = authority.tree_creator;
         let tree_delegate = authority.tree_delegate;
@@ -1034,6 +1061,7 @@ pub mod bubblegum {
             message,
             owner,
             delegate,
+            leaf_update_authority,
             metadata_auth,
             *ctx.bumps.get("tree_authority").unwrap(),
             authority,
@@ -1195,6 +1223,7 @@ pub mod bubblegum {
         let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
         let owner = ctx.accounts.leaf_owner.to_account_info();
         let delegate = ctx.accounts.leaf_delegate.to_account_info();
+        let update_authority = ctx.accounts.leaf_update_authority.key();
 
         // Transfers must be initiated by either the leaf owner or leaf delegate.
         require!(
@@ -1207,6 +1236,7 @@ pub mod bubblegum {
             asset_id,
             owner.key(),
             delegate.key(),
+            update_authority,
             nonce,
             data_hash,
             creator_hash,
@@ -1216,6 +1246,7 @@ pub mod bubblegum {
             asset_id,
             new_owner,
             new_owner,
+            update_authority,
             nonce,
             data_hash,
             creator_hash,
@@ -1249,12 +1280,14 @@ pub mod bubblegum {
         let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
         let owner = ctx.accounts.leaf_owner.key();
         let previous_delegate = ctx.accounts.previous_leaf_delegate.key();
+        let update_authority = ctx.accounts.leaf_update_authority.key();
         let new_delegate = ctx.accounts.new_leaf_delegate.key();
         let asset_id = get_asset_id(&merkle_tree.key(), nonce);
         let previous_leaf = LeafSchema::new_v0(
             asset_id,
             owner,
             previous_delegate,
+            update_authority,
             nonce,
             data_hash,
             creator_hash,
@@ -1263,6 +1296,7 @@ pub mod bubblegum {
             asset_id,
             owner,
             new_delegate,
+            update_authority,
             nonce,
             data_hash,
             creator_hash,
@@ -1295,6 +1329,7 @@ pub mod bubblegum {
     ) -> Result<()> {
         let owner = ctx.accounts.leaf_owner.to_account_info();
         let delegate = ctx.accounts.leaf_delegate.to_account_info();
+        let update_authority = ctx.accounts.leaf_update_authority.key();
 
         // Burn must be initiated by either the leaf owner or leaf delegate.
         require!(
@@ -1308,6 +1343,7 @@ pub mod bubblegum {
             asset_id,
             owner.key(),
             delegate.key(),
+            update_authority,
             nonce,
             data_hash,
             creator_hash,
@@ -1340,10 +1376,18 @@ pub mod bubblegum {
     ) -> Result<()> {
         let owner = ctx.accounts.leaf_owner.key();
         let delegate = ctx.accounts.leaf_delegate.key();
+        let update_authority = ctx.accounts.leaf_update_authority.key();
         let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
         let asset_id = get_asset_id(&merkle_tree.key(), nonce);
-        let previous_leaf =
-            LeafSchema::new_v0(asset_id, owner, delegate, nonce, data_hash, creator_hash);
+        let previous_leaf = LeafSchema::new_v0(
+            asset_id,
+            owner,
+            delegate,
+            update_authority,
+            nonce,
+            data_hash,
+            creator_hash,
+        );
 
         let new_leaf = Node::default();
 
